@@ -50,8 +50,15 @@ function validateTikTokUrl(value) {
   return parsed.toString();
 }
 
+const TIKWM_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+  'Accept': 'application/json, text/plain, */*',
+  'Origin': 'https://www.tikwm.com',
+  'Referer': 'https://www.tikwm.com/',
+};
+
 async function fetchJson(url, options = {}) {
-  const response = await fetch(url, { ...options, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+  const response = await fetch(url, { ...options, headers: { ...TIKWM_HEADERS, ...(options.headers || {}) }, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
   const text = await response.text();
   let data;
   try { data = JSON.parse(text); } catch { throw new Error(`TikWM returned invalid JSON (HTTP ${response.status}).`); }
@@ -205,8 +212,9 @@ export default async (request) => {
       if (!body.task_id) return json(400, { ok: false, error: 'task_id is required.' });
       const result = await fetchJson(`https://www.tikwm.com/api/video/task/result?task_id=${encodeURIComponent(body.task_id)}`);
       const task = result.data || {};
+      const detail = task.detail || task;
       return json(200, { ok: true, status: task.status || result.msg || 'processing',
-        original_download: task.play_url || task.download_url || task.play || null });
+        original_download: detail.play_url || detail.download_url || detail.play || null });
     }
 
     const data = await getTikwmData(url);
