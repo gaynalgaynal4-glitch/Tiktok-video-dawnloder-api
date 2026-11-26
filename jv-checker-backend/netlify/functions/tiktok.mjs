@@ -94,7 +94,7 @@ function normalize(data) {
       original_height: video.origin_cover?.height ?? null, vq_score: video.vq_score ?? null,
     },
     browser_resolution: null, browser_fps: null,
-    sound: { title: music.title || '', artist: music.author || '', id: music.id || '', url: music.play || '' },
+    sound: { title: music.title || '', artist: music.author || '', id: music.id || '', url: music.play || '', duration: music.duration ?? null },
     tags: (data.challenge || []).map(item => item.title).filter(Boolean),
     downloads: { video: video.play || data.play || '', hd: video.hdplay || data.hdplay || '', audio: music.play || '' },
   };
