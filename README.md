@@ -3,7 +3,7 @@
 Netlify Node.js Function for TikTok metadata, media probing, and small-file MP4 conversion.
 
 ## Deploy
-1. Upload the contents of this folder to a GitHub repository.
+1. The backend lives in the `jv-checker-backend/` folder, which is the Netlify base directory.
 2. Import the repository into Netlify.
 3. Set `API_SECRET` in Site configuration → Environment variables. Use a long random secret.
 4. Deploy. Netlify installs `ffmpeg-static` and `ffprobe-static`; `netlify.toml` includes their Linux x64 binaries in the function bundle.
