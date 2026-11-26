@@ -14,10 +14,13 @@ const MAX_DOWNLOAD_BYTES = 450 * 1024 * 1024;
 const MAX_CONVERTED_BYTES = 4 * 1024 * 1024;
 const FETCH_TIMEOUT_MS = 25_000;
 
-const json = (statusCode, body) => ({
-  statusCode,
-  headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' },
-  body: JSON.stringify(body),
+// Netlify's modern function runtime requires a standard Web Response.
+const json = (statusCode, body) => new Response(JSON.stringify(body), {
+  status: statusCode,
+  headers: {
+    'content-type': 'application/json; charset=utf-8',
+    'cache-control': 'no-store',
+  },
 });
 
 function runBinary(binary, args, timeoutMs = 40_000) {
