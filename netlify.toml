@@ -1,0 +1,9 @@
+[build]
+  functions = "netlify/functions"
+
+[functions]
+  node_bundler = "esbuild"
+  included_files = [
+    "node_modules/ffmpeg-static/ffmpeg",
+    "node_modules/ffprobe-static/bin/linux/x64/ffprobe"
+  ]
