@@ -45,3 +45,7 @@ Then poll with:
 - FFmpeg conversion is limited to a 4 MB output response. For normal full-size TikTok video conversions, long videos, 4K, or concurrent jobs, use a VPS (for example, a Linux server) and let Netlify call that service.
 - Browser playback resolution/FPS are not the same as FFprobe values. FFprobe reports the properties of the actual stream/file downloaded from TikWM. TikTok Browser Type playback is not independently resolved by this function.
 - TikWM is a third-party service; availability and returned fields may change.
+
+
+## Runtime response compatibility fix
+The function returns standard Web `Response` objects (including JSON error responses), as required by Netlify's modern function runtime.
