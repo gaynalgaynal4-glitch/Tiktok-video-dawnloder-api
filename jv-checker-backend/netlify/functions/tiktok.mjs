@@ -88,9 +88,9 @@ function normalize(data) {
       id: data.id || '', posted_at: data.create_time || null, region: data.region || '',
       width: video.width ?? null, height: video.height ?? null,
       resolution: video.width && video.height ? `${video.width}x${video.height}` : null,
-      definition: video.definition || null, duration: video.duration ?? null,
+      definition: video.definition || null, duration: video.duration ?? data.duration ?? null,
       codec: video.codec_type || null, bitrate: video.bitrate ?? null,
-      size: video.size ?? null, original_width: video.origin_cover?.width ?? null,
+      size: video.size ?? data.size ?? null, hd_size: data.hd_size ?? null, original_width: video.origin_cover?.width ?? null,
       original_height: video.origin_cover?.height ?? null, vq_score: video.vq_score ?? null,
     },
     browser_resolution: null, browser_fps: null,
@@ -133,8 +133,11 @@ async function withTempDir(callback) {
   try { return await callback(dir); } finally { await rm(dir, { recursive: true, force: true }); }
 }
 
-async function analyzeVideo(data) {
-  const sourceUrl = data.video?.hdplay || data.hdplay || data.video?.play || data.play || data.video?.wmplay || data.wmplay;
+async function analyzeVideo(data, quality) {
+  const standard = data.video?.play || data.play || data.video?.wmplay || data.wmplay;
+  const hd = data.video?.hdplay || data.hdplay;
+  // quality:"standard" probes the exact file the bot's Standard download button delivers.
+  const sourceUrl = quality === 'standard' ? (standard || hd) : (hd || standard);
   if (!sourceUrl) throw new Error('TikWM did not provide a playable video URL.');
   return withTempDir(async dir => {
     const input = path.join(dir, 'input.mp4');
@@ -220,7 +223,7 @@ export default async (request) => {
     const data = await getTikwmData(url);
     if (action === 'check') return json(200, { ok: true, data: normalize(data) });
     if (action === 'analyze' || action === 'probe') {
-      const media = await analyzeVideo(data);
+      const media = await analyzeVideo(data, body.quality);
       return json(200, { ok: true, data: normalize(data), media });
     }
     if (action === 'convert') {
