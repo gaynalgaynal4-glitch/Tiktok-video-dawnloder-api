@@ -14,10 +14,13 @@ const MAX_DOWNLOAD_BYTES = 450 * 1024 * 1024;
 const MAX_CONVERTED_BYTES = 4 * 1024 * 1024;
 const FETCH_TIMEOUT_MS = 25_000;
 
-const json = (statusCode, body) => ({
-  statusCode,
-  headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' },
-  body: JSON.stringify(body),
+// Netlify's modern function runtime requires a standard Web Response.
+const json = (statusCode, body) => new Response(JSON.stringify(body), {
+  status: statusCode,
+  headers: {
+    'content-type': 'application/json; charset=utf-8',
+    'cache-control': 'no-store',
+  },
 });
 
 function runBinary(binary, args, timeoutMs = 40_000) {
@@ -47,8 +50,15 @@ function validateTikTokUrl(value) {
   return parsed.toString();
 }
 
+const TIKWM_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+  'Accept': 'application/json, text/plain, */*',
+  'Origin': 'https://www.tikwm.com',
+  'Referer': 'https://www.tikwm.com/',
+};
+
 async function fetchJson(url, options = {}) {
-  const response = await fetch(url, { ...options, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+  const response = await fetch(url, { ...options, headers: { ...TIKWM_HEADERS, ...(options.headers || {}) }, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
   const text = await response.text();
   let data;
   try { data = JSON.parse(text); } catch { throw new Error(`TikWM returned invalid JSON (HTTP ${response.status}).`); }
@@ -56,8 +66,34 @@ async function fetchJson(url, options = {}) {
   return data;
 }
 
+// TikWM often blocks datacenter IPs (HTTP 403 / HTML block page). Set TIKWM_API_BASE to
+// one or more comma-separated relay addresses (e.g. a Cloudflare Worker running
+// tools/tikwm-relay-worker.js); they are tried first, then TikWM directly.
+function tikwmBases() {
+  const configured = String(Netlify.env.get('TIKWM_API_BASE') || process.env.TIKWM_API_BASE || '')
+    .split(',').map(v => v.trim().replace(/\/+$/, '')).filter(Boolean);
+  const defaults = ['https://www.tikwm.com', 'https://tikwm.com'];
+  return [...configured, ...defaults.filter(d => !configured.includes(d))];
+}
+
+async function tikwmJson(pathAndQuery, options = {}) {
+  const errors = [];
+  for (const base of tikwmBases()) {
+    try {
+      return await fetchJson(base + pathAndQuery, options);
+    } catch (error) {
+      errors.push(`${new URL(base).host}: ${error.message}`);
+    }
+  }
+  throw new Error(`All TikWM routes failed. ${errors.join(' | ')}`.slice(0, 700));
+}
+
 async function getTikwmData(url) {
-  const result = await fetchJson(`https://www.tikwm.com/api/?url=${encodeURIComponent(url)}`);
+  let result = await tikwmJson(`/api/?url=${encodeURIComponent(url)}`);
+  if (result.code !== 0 && /limit/i.test(String(result.msg || ''))) {
+    await new Promise(resolve => setTimeout(resolve, 1300));
+    result = await tikwmJson(`/api/?url=${encodeURIComponent(url)}`);
+  }
   if (result.code !== 0 || !result.data) throw new Error(result.msg || 'TikTok information could not be retrieved.');
   return result.data;
 }
@@ -78,13 +114,13 @@ function normalize(data) {
       id: data.id || '', posted_at: data.create_time || null, region: data.region || '',
       width: video.width ?? null, height: video.height ?? null,
       resolution: video.width && video.height ? `${video.width}x${video.height}` : null,
-      definition: video.definition || null, duration: video.duration ?? null,
+      definition: video.definition || null, duration: video.duration ?? data.duration ?? null,
       codec: video.codec_type || null, bitrate: video.bitrate ?? null,
-      size: video.size ?? null, original_width: video.origin_cover?.width ?? null,
+      size: video.size ?? data.size ?? null, hd_size: data.hd_size ?? null, original_width: video.origin_cover?.width ?? null,
       original_height: video.origin_cover?.height ?? null, vq_score: video.vq_score ?? null,
     },
     browser_resolution: null, browser_fps: null,
-    sound: { title: music.title || '', artist: music.author || '', id: music.id || '', url: music.play || '' },
+    sound: { title: music.title || '', artist: music.author || '', id: music.id || '', url: music.play || '', duration: music.duration ?? null },
     tags: (data.challenge || []).map(item => item.title).filter(Boolean),
     downloads: { video: video.play || data.play || '', hd: video.hdplay || data.hdplay || '', audio: music.play || '' },
   };
@@ -123,8 +159,11 @@ async function withTempDir(callback) {
   try { return await callback(dir); } finally { await rm(dir, { recursive: true, force: true }); }
 }
 
-async function analyzeVideo(data) {
-  const sourceUrl = data.video?.hdplay || data.hdplay || data.video?.play || data.play || data.video?.wmplay || data.wmplay;
+async function analyzeVideo(data, quality) {
+  const standard = data.video?.play || data.play || data.video?.wmplay || data.wmplay;
+  const hd = data.video?.hdplay || data.hdplay;
+  // quality:"standard" probes the exact file the bot's Standard download button delivers.
+  const sourceUrl = quality === 'standard' ? (standard || hd) : (hd || standard);
   if (!sourceUrl) throw new Error('TikWM did not provide a playable video URL.');
   return withTempDir(async dir => {
     const input = path.join(dir, 'input.mp4');
@@ -190,7 +229,7 @@ export default async (request) => {
 
     if (action === 'original_submit') {
       const form = new URLSearchParams({ url, web: '1' });
-      const submitted = await fetchJson('https://www.tikwm.com/api/video/task/submit', {
+      const submitted = await tikwmJson('/api/video/task/submit', {
         method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded; charset=UTF-8',
           'X-Requested-With': 'XMLHttpRequest', Referer: 'https://www.tikwm.com/' }, body: form,
       });
@@ -200,16 +239,17 @@ export default async (request) => {
 
     if (action === 'original_status') {
       if (!body.task_id) return json(400, { ok: false, error: 'task_id is required.' });
-      const result = await fetchJson(`https://www.tikwm.com/api/video/task/result?task_id=${encodeURIComponent(body.task_id)}`);
+      const result = await tikwmJson(`/api/video/task/result?task_id=${encodeURIComponent(body.task_id)}`);
       const task = result.data || {};
+      const detail = task.detail || task;
       return json(200, { ok: true, status: task.status || result.msg || 'processing',
-        original_download: task.play_url || task.download_url || task.play || null });
+        original_download: detail.play_url || detail.download_url || detail.play || null });
     }
 
     const data = await getTikwmData(url);
     if (action === 'check') return json(200, { ok: true, data: normalize(data) });
     if (action === 'analyze' || action === 'probe') {
-      const media = await analyzeVideo(data);
+      const media = await analyzeVideo(data, body.quality);
       return json(200, { ok: true, data: normalize(data), media });
     }
     if (action === 'convert') {
