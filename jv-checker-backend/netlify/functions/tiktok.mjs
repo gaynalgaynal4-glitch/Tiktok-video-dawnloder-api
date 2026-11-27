@@ -66,8 +66,34 @@ async function fetchJson(url, options = {}) {
   return data;
 }
 
+// TikWM often blocks datacenter IPs (HTTP 403 / HTML block page). Set TIKWM_API_BASE to
+// one or more comma-separated relay addresses (e.g. a Cloudflare Worker running
+// tools/tikwm-relay-worker.js); they are tried first, then TikWM directly.
+function tikwmBases() {
+  const configured = String(Netlify.env.get('TIKWM_API_BASE') || process.env.TIKWM_API_BASE || '')
+    .split(',').map(v => v.trim().replace(/\/+$/, '')).filter(Boolean);
+  const defaults = ['https://www.tikwm.com', 'https://tikwm.com'];
+  return [...configured, ...defaults.filter(d => !configured.includes(d))];
+}
+
+async function tikwmJson(pathAndQuery, options = {}) {
+  const errors = [];
+  for (const base of tikwmBases()) {
+    try {
+      return await fetchJson(base + pathAndQuery, options);
+    } catch (error) {
+      errors.push(`${new URL(base).host}: ${error.message}`);
+    }
+  }
+  throw new Error(`All TikWM routes failed. ${errors.join(' | ')}`.slice(0, 700));
+}
+
 async function getTikwmData(url) {
-  const result = await fetchJson(`https://www.tikwm.com/api/?url=${encodeURIComponent(url)}`);
+  let result = await tikwmJson(`/api/?url=${encodeURIComponent(url)}`);
+  if (result.code !== 0 && /limit/i.test(String(result.msg || ''))) {
+    await new Promise(resolve => setTimeout(resolve, 1300));
+    result = await tikwmJson(`/api/?url=${encodeURIComponent(url)}`);
+  }
   if (result.code !== 0 || !result.data) throw new Error(result.msg || 'TikTok information could not be retrieved.');
   return result.data;
 }
@@ -203,7 +229,7 @@ export default async (request) => {
 
     if (action === 'original_submit') {
       const form = new URLSearchParams({ url, web: '1' });
-      const submitted = await fetchJson('https://www.tikwm.com/api/video/task/submit', {
+      const submitted = await tikwmJson('/api/video/task/submit', {
         method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded; charset=UTF-8',
           'X-Requested-With': 'XMLHttpRequest', Referer: 'https://www.tikwm.com/' }, body: form,
       });
@@ -213,7 +239,7 @@ export default async (request) => {
 
     if (action === 'original_status') {
       if (!body.task_id) return json(400, { ok: false, error: 'task_id is required.' });
-      const result = await fetchJson(`https://www.tikwm.com/api/video/task/result?task_id=${encodeURIComponent(body.task_id)}`);
+      const result = await tikwmJson(`/api/video/task/result?task_id=${encodeURIComponent(body.task_id)}`);
       const task = result.data || {};
       const detail = task.detail || task;
       return json(200, { ok: true, status: task.status || result.msg || 'processing',
